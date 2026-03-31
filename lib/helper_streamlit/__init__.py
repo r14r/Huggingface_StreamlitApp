@@ -14,7 +14,7 @@ def render_sidebar() -> tuple[str | None, str | None]:
 
     provider = st.sidebar.selectbox(
         "Inference Provider",
-        ["auto", "hf-inference"], # , "fal-ai", "replicate", "sambanova", "together"],
+        ["auto", "hf-inference", "fal-ai", "replicate", "sambanova", "together"],
         index=0,
         help="Nicht jeder Provider unterstützt jede Aufgabe oder jedes Modell.",
     )

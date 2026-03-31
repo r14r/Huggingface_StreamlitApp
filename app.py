@@ -1,199 +1,23 @@
 import io
 import os
-import tempfile
-from pathlib import Path
-from typing import Iterable, List
 
 import streamlit as st
-from dotenv import load_dotenv
-from huggingface_hub import HfApi, InferenceClient
 from PIL import Image
 
-APP_TITLE = "Hugging Face Studio"
+from lib import coerce_text_response
+from lib.config import APP_TITLE, DEFAULT_IMAGE_MODELS, DEFAULT_TEXT_MODELS, DEFAULT_VIDEO_MODELS
+from lib.helper_huggingface import (
+    DEFAULT_HF_VIDEO_MODELS,
+    detect_device,
+    get_client,
+    smart_generate,
+    stream_chat_completion,
+)
+from lib.helper_streamlit import model_picker, render_sidebar
 
-DEFAULT_TEXT_MODELS = [
-    "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    "Qwen/Qwen2.5-7B-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
-    "google/gemma-2-9b-it",
-]
-
-DEFAULT_IMAGE_MODELS = [
-    "black-forest-labs/FLUX.1-dev",
-    "black-forest-labs/FLUX.1-schnell",
-    "stabilityai/stable-diffusion-xl-base-1.0",
-    "stabilityai/sdxl-turbo",
-]
-
-DEFAULT_VIDEO_MODELS = [
-    "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-    "zai-org/CogVideoX-2b",
-    "ali-vilab/text-to-video-ms-1.7b",
-
-    "calamansi/Wan2.2-TI2V-5B",
-    "KlingTeam/ShotStream",
-    "viberobin/Wan2.1-T2V-1.3B-VedioQuant",
-    "dx8152/LTX2.3-Multifunctional",
-    "Jovin12Dhas/Wan2.2-T2V-A14B",
-    "the-sweater-cat/Wan2.1-Fun-V1.1-1.3B-Control-Diffusers",
-    "TheStageAI/Elastic-Wan2.2-T2V-A14B-Diffusers",
-    "zhendemeiyou/Wan2.2-TI2V-5B-Diffusers",
-    "gajesh/LTX-2.3-mlx-q4",
-    "gajesh/LTX-2.3-mlx-fp16",
-    "Alibaba-DAMO-Academy/LumosX",
-    "Kotajiro/LTX23-ruri_LoRA",
-    "hlaaa/Open-Sora-v2",
-    "2klpostive/wan-gguf",
-    "Admmer/Wan2.2-TI2V-5B-Diffusers",
-    "Calamdor/Wan2.2-T2V-A14B-BF16",
-    "aaftabazad612/text-to-video-ms-1.7b",
-    "H-EmbodVis/HyDRA",
-    "snowytsai/Wan2.2-T2V-A14B",
-    "snowytsai/Wan2.2-TI2V-5B-Diffusers",
-    "snowytsai/Wan2.2-TI2V-5B",
-    "snowytsai/Wan2.2-T2V-A14B-Diffusers",
-]
-
-
-load_dotenv(Path(__file__).with_name(".env"))
-HF_TOKEN=os.getenv("HF_TOKEN", "")
+DEFAULT_VIDEO_PROMPT = "A cinematic robot dancing in neon rain, highly detailed, dynamic camera motion"
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🤗", layout="wide")
-
-
-@st.cache_resource(show_spinner=False)
-def get_api(token: str | None) -> HfApi:
-    return HfApi(token=token)
-
-
-@st.cache_resource(show_spinner=False)
-def get_client(token: str | None, provider: str | None) -> InferenceClient:
-    kwargs = {"api_key": token} if token else {}
-    if provider and provider != "auto":
-        kwargs["provider"] = provider
-    return InferenceClient(**kwargs)
-
-
-@st.cache_data(ttl=900, show_spinner=False)
-def search_models(token: str | None, search: str, task: str, limit: int = 20) -> List[str]:
-    api = get_api(token)
-    try:
-        models = api.list_models(search=search or None, filter=task, sort="downloads", direction=-1, limit=limit)
-        return [m.id for m in models]
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=900, show_spinner=False)
-def trending_models(token: str | None, task: str, limit: int = 20) -> List[str]:
-    api = get_api(token)
-    try:
-        models = api.list_models(filter=task, sort="downloads", direction=-1, limit=limit)
-        return [m.id for m in models]
-    except Exception:
-        return []
-
-
-
-def save_binary_file(data: bytes, suffix: str) -> Path:
-    tmp_dir = Path(tempfile.mkdtemp(prefix="hf_streamlit_"))
-    path = tmp_dir / f"output{suffix}"
-    path.write_bytes(data)
-    return path
-
-
-
-def coerce_text_response(response) -> str:
-    if response is None:
-        return ""
-    if isinstance(response, str):
-        return response
-    if hasattr(response, "choices"):
-        parts: list[str] = []
-        for choice in getattr(response, "choices", []) or []:
-            message = getattr(choice, "message", None)
-            content = getattr(message, "content", None)
-            if content:
-                parts.append(str(content))
-        if parts:
-            return "\n".join(parts)
-    return str(response)
-
-
-
-def stream_chat_completion(client: InferenceClient, model: str, messages: list[dict], max_tokens: int, temperature: float):
-    stream = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        stream=True,
-    )
-    placeholder = st.empty()
-    chunks: list[str] = []
-    for chunk in stream:
-        try:
-            delta = chunk.choices[0].delta.content
-        except Exception:
-            delta = None
-        if delta:
-            chunks.append(delta)
-            placeholder.markdown("".join(chunks))
-    return "".join(chunks)
-
-
-
-def render_sidebar() -> tuple[str | None, str | None]:
-    st.sidebar.title("Einstellungen")
-    token = st.sidebar.text_input(
-        "HF Token",
-        value=os.getenv("HF_TOKEN", ""),
-        type="password",
-        help="Nutze einen Hugging Face User Access Token. Ohne Token sind viele Modelle oder Provider nicht nutzbar.",
-    ) or None
-
-    provider = st.sidebar.selectbox(
-        "Inference Provider",
-        ["auto", "hf-inference", "fal-ai", "replicate", "sambanova", "together"],
-        index=0,
-        help="Nicht jeder Provider unterstützt jede Aufgabe oder jedes Modell.",
-    )
-
-    st.sidebar.markdown(
-        """
-**Hinweise**
-- Text nutzt Chat Completions.
-- Bild nutzt `text_to_image`.
-- Video nutzt `text_to_video`.
-- Modellverfügbarkeit hängt vom Hub und vom gewählten Provider ab.
-        """
-    )
-    return token, provider
-
-
-
-def model_picker(title: str, token: str | None, task: str, defaults: list[str], key_prefix: str) -> str:
-    st.subheader(title)
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        query = st.text_input("Modelsuche", key=f"{key_prefix}_query", placeholder="z. B. Qwen, FLUX, Wan")
-    with col2:
-        refresh = st.button("Liste aktualisieren", key=f"{key_prefix}_refresh")
-
-    options = defaults.copy()
-    if query or refresh:
-        found = search_models(token, query, task)
-        if found:
-            options = found
-    elif not query:
-        found = trending_models(token, task)
-        if found:
-            options = found[:20]
-
-    custom = st.text_input("Oder eigene Model-ID", key=f"{key_prefix}_custom", placeholder="owner/model")
-    selected = st.selectbox("Modell", options=options, key=f"{key_prefix}_select") if options else ""
-    return custom.strip() or selected
-
 
 
 def text_tab(token: str | None, provider: str | None):
@@ -233,7 +57,6 @@ def text_tab(token: str | None, provider: str | None):
             st.error(f"Fehler bei der Textgenerierung: {exc}")
 
 
-
 def image_tab(token: str | None, provider: str | None):
     model = model_picker("Bildgenerierung", token, "text-to-image", DEFAULT_IMAGE_MODELS, "image")
     prompt = st.text_area("Bildprompt", height=180, placeholder="Beschreibe das gewünschte Bild.")
@@ -259,34 +82,54 @@ def image_tab(token: str | None, provider: str | None):
             st.error(f"Fehler bei der Bildgenerierung: {exc}")
 
 
-DEFAULT_VIDEO_PROMPT = "Ein Programmierer steht an ein em Whiteboard und erstelle eine Zeichnung"
 def video_tab(token: str | None, provider: str | None):
-    model = model_picker("Videogenerierung", token, "text-to-video", DEFAULT_VIDEO_MODELS, "video")
-    prompt = st.text_area("Videoprompt", height=180, placeholder="Beschreibe das gewünschte Video.", value=DEFAULT_VIDEO_PROMPT)
+    st.subheader("Videogenerierung (v2 integriert)")
+
+    left, right = st.columns([2, 1])
+    with left:
+        prompt = st.text_area("Videoprompt", height=180, value=DEFAULT_VIDEO_PROMPT)
+    with right:
+        preferred_mode = st.selectbox("Ausführungsmodus", ["HF serverless", "Local"])
+        hf_model_id = st.selectbox("HF Modell", DEFAULT_HF_VIDEO_MODELS + ["dx8152/LTX2.3-Multifunctional"])
+        local_model_id = st.selectbox("Lokales Modell", DEFAULT_VIDEO_MODELS)
 
     if st.button("Video generieren", type="primary", key="run_video"):
         if not prompt.strip():
             st.warning("Bitte einen Videoprompt eingeben.")
             return
-        try:
-            client = get_client(token, provider)
-            with st.spinner("Video wird generiert ..."):
-                video = client.text_to_video(prompt, model=model)
-                if isinstance(video, (bytes, bytearray)):
-                    data = bytes(video)
-                elif hasattr(video, "read"):
-                    data = video.read()
-                else:
-                    raise TypeError(f"Unerwarteter Rückgabetyp: {type(video)}")
-                path = save_binary_file(data, ".mp4")
-            st.video(str(path))
-            st.download_button("MP4 herunterladen", data=data, file_name="generated.mp4", mime="video/mp4")
-        except Exception as exc:
-            st.error(
-                "Fehler bei der Videogenerierung: "
-                f"{exc}. Prüfe Modell-ID, Provider-Unterstützung und ob dein Token für den gewählten Endpoint freigeschaltet ist."
-            )
 
+        with st.status("Generierung läuft...", expanded=True) as status:
+            st.write("1. Eingaben validieren")
+            st.write(f"2. Modus: {preferred_mode}")
+            st.write(f"3. Provider: {provider}")
+            result = smart_generate(prompt, preferred_mode, hf_model_id, local_model_id, provider, token)
+            status.update(label="Fertig" if result.ok else "Fehlgeschlagen", state="complete" if result.ok else "error")
+
+        if result.ok:
+            st.success(result.message)
+            st.json(
+                {
+                    "mode": result.mode,
+                    "provider": result.provider,
+                    "model_id": result.model_id,
+                    "output_path": result.output_path,
+                }
+            )
+            if result.output_path and result.output_path.endswith(".json"):
+                st.code(open(result.output_path, "r", encoding="utf-8").read(), language="json")
+            elif result.output_path:
+                st.info(f"Binäre Ausgabe gespeichert unter: {result.output_path}")
+        else:
+            st.error(result.message)
+            if result.details:
+                with st.expander("Technische Details"):
+                    st.code(result.details)
+
+    with st.expander("Warum dx8152/LTX2.3-Multifunctional problematisch sein kann", expanded=False):
+        st.write(
+            "Dieses Repo ist oft nicht direkt als standardisierter HF-serverless Text-to-Video Endpoint nutzbar. "
+            "Die App behandelt es deshalb nicht als freigeschaltetes Standard-HF-Modell."
+        )
 
 
 def main() -> None:
@@ -294,6 +137,12 @@ def main() -> None:
     st.caption("Streamlit-App für Text-, Bild- und Videogenerierung über die Hugging Face API")
 
     token, provider = render_sidebar()
+
+    with st.sidebar:
+        st.subheader("System")
+        st.write(f"Device: **{detect_device()}**")
+        st.write(f"HF token gesetzt: **{'ja' if bool(token or os.getenv('HF_TOKEN')) else 'nein'}**")
+        st.write("fal-ai ist absichtlich als kostenpflichtig markiert.")
 
     tabs = st.tabs(["Text", "Bild", "Video"])
     with tabs[0]:
