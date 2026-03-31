@@ -1,0 +1,6 @@
+streamlit
+watchdog
+
+huggingface_hub
+pillow
+python-dotenv

@@ -1,0 +1,9 @@
+.venv
+
+.envrc
+.set_env.sh
+
+.env
+
+**/__pycache__
+

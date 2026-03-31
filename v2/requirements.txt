@@ -1,0 +1,6 @@
+streamlit
+huggingface_hub
+requests
+
+# Optional for future local inference:
+torch>=2.2
